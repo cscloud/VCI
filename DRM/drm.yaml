@@ -1,0 +1,289 @@
+heat_template_version: 2013-05-23
+
+description:
+  DRM HE service template.
+
+parameters:
+
+  "urn:com:cisco:vci:heat:stack:dmz:subnetid":
+    type: string
+    description: Subnet Id for CPE DMZ NW
+
+  "urn:com:cisco:vci:heat:stack:dmz:networkid":
+    type: string
+    description: Network Id for CPE DMZ NW
+
+  "urn:com:cisco:vci:heat:stack:subnetid":
+    type: string
+    description: Subnet Id for Internal NW
+
+  "urn:com:cisco:vci:heat:stack:networkid":
+    type: string
+    description: Network Id for Internal NW
+
+  "urn:cisco:service:drm:mainimage.imagename":
+    type: string
+    description: Name of image used in instance creation (required parameter; not used in this template)
+
+  "urn:cisco:service:drm:mainimage.flavorname":
+    type: string
+    description: Name of flavor used in instance creation (required parameter; not used in this template)
+
+  "urn:cisco:service:drm:mainimage.quantity:min":
+    type: string
+    description: Minimum quantity used in instance creation and scaling
+
+  "urn:cisco:service:drm:mainimage.quantity:max":
+    type: string
+    description: Maximum quantity used in instance creation and scaling
+
+  "urn:cisco:service:drm:secondaryimage.imagename":
+    type: string
+    description: Name of image used in instance creation
+
+  "urn:cisco:service:drm:secondaryimage.flavorname":
+    type: string
+    description: Name of flavor used in instance creation
+
+  "urn:cisco:service:drm:secondaryimage.quantity:min":
+    type: string
+    description: Minimum quantity used in instance creation and scaling
+
+  "urn:cisco:service:drm:secondaryimage.quantity:max":
+    type: string
+    description: Maximum quantity used in instance creation and scaling
+
+
+  "urn:com:cisco:vci:service:parameter:upm_host":
+      type: string
+      default: "undef"
+      description: UPM URL
+  "urn:com:cisco:vci:service:parameter:sdllg_host":
+      type: string
+      default: "undef"
+      description: SDLLG URL
+  "urn:com:cisco:vci:service:parameter:vssh_host":
+      type: string
+      default: "undef"
+      description: vSSH URL for STB authentication
+  "urn:com:cisco:vci:service:parameter:vssh_chiptype":
+      type: string
+      default: "4280"
+      description: vSSH Chip Type
+  "urn:com:cisco:vci:service:parameter:drm_tierId":
+      type: string
+      default: "70144"
+      description: DRM Tier Id defined for the current project (decimal value)
+  "urn:com:cisco:vci:service:parameter:chipId_to_stbId_conversion_factor":
+      type: string
+      default: "0x0"
+      description: chipId to stbId conversion factor (hex) – for projects  where DEVICE_ID in UPM holds HGW/STBId
+  "urn:com:cisco:vci:service:parameter:drm_is_tierId_from_config":
+      type: string
+      default: "true"
+      description: Defines whether the tierId will be taken from config, rather than from UPM
+      constraints:
+            - allowed_values: [ 'true', 'false' ]
+              description: Value must be one of 'true', 'false'
+  "urn:com:cisco:vci:service:parameter:security_keys_url":
+      type: string
+      default: "no-url"
+      description: URL for security keys
+  "urn:cisco:service:drm:mainaz.azname":
+      type: string
+      description: Availability zone name for the main example AZ
+
+  "urn:com:cisco:vci:iaas:resource:nameprefix":
+      type: string
+      default: "DRM"
+      description: A unique prefix for all instances names
+
+  "urn:com:cisco:vci:service:parameter:product_artifact_id":
+      type: string
+      default: "drm-product"
+      description: the name of the Puppet RPM
+  "urn:com:cisco:vci:service:parameter:infra_repo":
+      type: string
+      default: "http://10.57.58.252/infra/6/x86_64"
+      description: url to infra yum repo
+  "urn:com:cisco:vci:service:parameter:product_repo":
+     type: string
+     default: "http://10.57.58.252/ci-repo/drm-product/latest"
+     description: url to product yum repo
+  "urn:com:cisco:vci:service:parameter:environment":
+     type: string
+     default: lwr
+     description: environment for DNS registration
+
+
+resources:
+  basic_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Basic Security Group for SSH
+      rules:
+      - remote_ip_prefix: 0.0.0.0/0
+        protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+      - remote_ip_prefix: 0.0.0.0/0
+        protocol: icmp
+
+  keypair:
+      type: OS::Nova::KeyPair
+      properties:
+        name:
+          str_replace:
+            template: $prefix_keypair
+            params:
+              $prefix: { get_param: "OS::stack_name" }
+        save_private_key: true
+
+  sgw_group:
+    type: __scaling_group_with_internal_one_lb.yaml
+    properties:
+      nameprefix: { get_param: "OS::stack_name" }
+      instance_name: SGW
+      key_name:  {  get_resource: keypair }
+      flavor: { get_param: "urn:cisco:service:drm:mainimage.flavorname" }
+      image: { get_param: "urn:cisco:service:drm:mainimage.imagename" }
+      private_network_id: { get_param: "urn:com:cisco:vci:heat:stack:dmz:networkid" }
+      private_subnet_id: { get_param: "urn:com:cisco:vci:heat:stack:dmz:subnetid" }
+      availability_zone: { get_param: "urn:cisco:service:drm:mainaz.azname" }
+      security_group_id: { get_resource: basic_security_group }
+      min_size: { get_param: "urn:cisco:service:drm:mainimage.quantity:min" }
+      max_size: { get_param: "urn:cisco:service:drm:mainimage.quantity:max" }
+      port: "5320"
+      lb_protocol: HTTP
+      lb_name: SGW
+      environment: { get_param: "urn:com:cisco:vci:service:parameter:environment" }
+      component_installation:
+        str_replace:
+          template: { get_file: component_installation.sh }
+          params:
+            $product_artifact_id: { get_param: "urn:com:cisco:vci:service:parameter:product_artifact_id" }
+            $infra_repo: { get_param: "urn:com:cisco:vci:service:parameter:infra_repo" }
+            $product_repo: { get_param: "urn:com:cisco:vci:service:parameter:product_repo" }
+            $component_list: 'jdk::jdk17, sgw'
+            $args_list:
+              str_replace:
+                template: $arg1_=_["$drm_prefix-ACTIVATION_CONTROL-DRMSAC_SAC"]_,_$arg2_=_["$drm_prefix-ACTIVATION_CONTROL-DRMSAC"]_,_$arg3_=_["$drm_prefix-LICENSE_CONTROL-DRMSLG"]_,_$arg4_=_["$drm_prefix-LICENSE_CONTROL-DRMSLG"]
+                params:
+                  $drm_prefix: { get_param: "urn:com:cisco:vci:iaas:resource:nameprefix" }
+                  $environment: { get_param: "urn:com:cisco:vci:service:parameter:environment" }
+                  $arg1: "sac::host"
+                  $arg2: "drms::host"
+                  $arg3: "drmlg::host"
+                  $arg4: "drmvlg::host"
+      deployment_timeout: 1200
+  drm_license_control_group:
+       type: __scaling_group_with_internal_and_external_two_lb.yaml
+       properties:
+         nameprefix: { get_param: "OS::stack_name" }
+         instance_name: LICENSE_CONTROL
+         key_name:  {  get_resource: keypair }
+         flavor: { get_param: "urn:cisco:service:drm:mainimage.flavorname" }
+         image: { get_param: "urn:cisco:service:drm:mainimage.imagename" }
+         private_network_id: { get_param: "urn:com:cisco:vci:heat:stack:networkid" }
+         private_subnet_id: { get_param: "urn:com:cisco:vci:heat:stack:subnetid" }
+         public_subnet_id: { get_param: "urn:com:cisco:vci:heat:stack:dmz:subnetid" }
+         availability_zone: { get_param: "urn:cisco:service:drm:mainaz.azname" }
+         security_group_id: { get_resource: basic_security_group }
+         min_size: { get_param: "urn:cisco:service:drm:mainimage.quantity:min" }
+         max_size: { get_param: "urn:cisco:service:drm:mainimage.quantity:max" }
+         first_lb_port: "5701"
+         second_lb_port: "6081"
+         protocol_first_lb: HTTP
+         protocol_second_lb: HTTP
+         first_lb_name: ABREREST
+         second_lb_name: DRMSLG
+         environment: { get_param: "urn:com:cisco:vci:service:parameter:environment" }
+         component_installation:
+           str_replace:
+             template: { get_file: component_installation.sh }
+             params:
+               $product_artifact_id: { get_param: "urn:com:cisco:vci:service:parameter:product_artifact_id" }
+               $infra_repo: { get_param: "urn:com:cisco:vci:service:parameter:infra_repo" }
+               $product_repo: { get_param: "urn:com:cisco:vci:service:parameter:product_repo" }
+               $component_list: 'jdk::jdk17, keystore, ecms, drms::drmslg abrerest'
+               $args_list:
+                 str_replace:
+                   template: $arg1_=_$val1_,_$arg2_=_$val2_,_$arg3_=_$val3_,_$arg4_=_$val4_,_$arg5_=_$val5_,_$arg6_=_$val6
+                   params:
+                     $arg1: "ecmsconf::keystorehost"
+                     $val1: "localhost"
+                     $arg2: "ecms::host"
+                     $val2: "localhost"
+                     $arg3: "keystore::host"
+                     $val3: "localhost"
+                     $arg4: "drms::isTierIdsFromConfiguration"
+                     $val4: { get_param: "urn:com:cisco:vci:service:parameter:drm_is_tierId_from_config" }
+                     $arg5: "drm::tierId"
+                     $val5: { get_param: "urn:com:cisco:vci:service:parameter:drm_tierId" }
+                     $arg6: "drms::chipIdToStbIdConversionFactor"
+                     $val6: { get_param: "urn:com:cisco:vci:service:parameter:chipId_to_stbId_conversion_factor" }
+         deployment_timeout: 1200
+  drm_activation_control_group:
+       type: __scaling_group_with_internal_two_lb.yaml
+       properties:
+         nameprefix: { get_param: "OS::stack_name" }
+         instance_name: ACTIVATION_CONTROL
+         key_name:  {  get_resource: keypair }
+         flavor: { get_param: "urn:cisco:service:drm:secondaryimage.flavorname" }
+         image: { get_param: "urn:cisco:service:drm:secondaryimage.imagename" }
+         private_network_id: { get_param: "urn:com:cisco:vci:heat:stack:networkid" }
+         private_subnet_id: { get_param: "urn:com:cisco:vci:heat:stack:dmz:subnetid" }
+         availability_zone: { get_param: "urn:cisco:service:drm:mainaz.azname" }
+         security_group_id: { get_resource: basic_security_group }
+         min_size: { get_param: "urn:cisco:service:drm:secondaryimage.quantity:min" }
+         max_size: { get_param: "urn:cisco:service:drm:secondaryimage.quantity:max" }
+         first_lb_port: "6080"
+         second_lb_port: "6081"
+         protocol_first_lb: HTTP
+         protocol_second_lb: HTTP
+         first_lb_name: DRMSAC_SAC
+         second_lb_name: DRMSAC
+         environment: { get_param: "urn:com:cisco:vci:service:parameter:environment" }
+         component_installation:
+           str_replace:
+             template: { get_file: component_installation.sh }
+             params:
+               $product_artifact_id: { get_param: "urn:com:cisco:vci:service:parameter:product_artifact_id" }
+               $infra_repo: { get_param: "urn:com:cisco:vci:service:parameter:infra_repo" }
+               $product_repo: { get_param: "urn:com:cisco:vci:service:parameter:product_repo" }
+               $component_list: 'jdk::jdk17, drms::drmsac'
+               $args_list:
+                 str_replace:
+                   template: $arg1_=_$val1_,_$arg2_=_$val2_,_$arg3_=_$val3_,_$arg4_=_$val4_,_$arg5_=_$val5_,_$arg6_=_$val6
+                   params:
+                     $arg1: "upm::host"
+                     $val1: { get_param: "urn:com:cisco:vci:service:parameter:upm_host" }
+                     $arg2: "drms::isTierIdsFromConfiguration"
+                     $val2: { get_param: "urn:com:cisco:vci:service:parameter:drm_is_tierId_from_config" }
+                     $arg3: "drm::tierId"
+                     $val3: { get_param: "urn:com:cisco:vci:service:parameter:drm_tierId" }
+                     $arg4: "service::sshhost"
+                     $val4: { get_param: "urn:com:cisco:vci:service:parameter:vssh_host" }
+                     $arg5: "ssh::chipType"
+                     $val5: { get_param: "urn:com:cisco:vci:service:parameter:vssh_chiptype" }
+                     $arg6: "sgp::tcpClienthost"
+                     $val6: { get_param: "urn:com:cisco:vci:service:parameter:sdllg_host" }
+         deployment_timeout: 1200
+outputs:
+  "urn:com:cisco:vci:service:parameter:sgw_endpoint":
+    description: SGW LB
+    value:
+      str_replace:
+        template: $dns_fqdn:5320
+        params:
+          $dns_fqdn: { get_attr: [sgw_group , lb_fqdn] }
+  "urn:com:cisco:vci:service:parameter:abre-rest_endpoint":
+      description: ABRE-REST LB
+      value:
+        str_replace:
+          template: $dns_fqdn:5701
+          params:
+            $dns_fqdn: { get_attr: [drm_license_control_group , first_lb_fqdn] }
+  "urn:com:cisco:vci:iaas:resource:nameprefix":
+        description: DRM DNS prefix
+        value: { get_param: "OS::stack_name" }

@@ -1,0 +1,152 @@
+heat_template_version: 2013-05-23
+description: >
+  Heat template for a single instance which is connected to two load balancers.
+  Ver. 1.0.5-0
+parameters:
+  nameprefix:
+    type: string
+    description: A prefix string for the name of the instance
+  instance_name:
+    type: string
+    description: Instance name - can be the component name
+  image:
+    type: string
+    description: Image used for servers
+  key_name:
+    type: string
+    description: SSH key to connect to the servers
+  flavor:
+    type: string
+    description: flavor used by the servers
+  groupname_stack:
+    type: string
+    description: A unique string which represent the scaling group stack
+  private_network_id:
+    type: string
+    description: ID of network into which servers get deployed
+  security_groups_ids:
+    type: comma_delimited_list 
+    description: ID of security group for this instance port
+  availability_zone:
+     type: string
+     description: The Availability Zone in which to launch the instance.
+  first_lb_details:
+    type: json
+    description: First LB Details
+  second_lb_details:
+    type: json
+    description: Second LB Details
+  third_lb_details:
+    type: json
+    description: Third LB Details
+  environment: 
+    type: string
+    description: DNS environment name  
+  component_installation:
+    type: string
+    description: The boot script to run on instance creation.
+  deployment_timeout:
+    type: number
+    description: The time it takes for this instance to be fully deployed.   
+resources:
+  
+  server_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_network_id }
+      security_groups: { get_param: security_groups_ids }
+    
+  server:
+    type: OS::Nova::Server
+    properties:
+      name:
+        str_replace:
+          template: $nameprefix-$instance_name-$stack_id
+          params:
+            $nameprefix : { get_param: nameprefix }
+            $instance_name: { get_param: instance_name }
+            $stack_id: { get_param: "OS::stack_id" }  
+      flavor: {get_param: flavor}
+      image: {get_param: image}
+      key_name: {get_param: key_name}
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: server_port } 
+      metadata: {'metering.groupname_stack': { get_param: groupname_stack } ,  'metering.instance_stack':  {get_param: "OS::stack_name"}}
+      user_data_format: RAW
+      user_data: 
+        str_replace:
+          template:  
+            { get_file: general_user_data.sh } 
+          params:
+            # admin
+            $vci_utility_scripts: { get_file: vci-utility-scripts }
+            $check_installation:
+              str_replace:
+                template: { get_file: check_installation.sh }
+                params: 
+                  $wait_handle: { get_resource: wait_handle }
+                  $port:  { "Fn::Select" : [ "port", { get_param: first_lb_details } ] }  
+            
+            # component related
+            $component_installation: { get_param: component_installation }
+            $environment: { get_param:  environment }
+            $lbs_details:
+              str_replace:
+                template:
+                  $name_first_lb:$ip_first_lb,$name_second_lb:$ip_second_lb,$name_third_lb:$ip_third_lb
+                params: 
+                  $name_first_lb: { "Fn::Select" : [ "name", { get_param: first_lb_details } ] }  
+                  $ip_first_lb: { "Fn::Select" : [ "internal_ip", { get_param: first_lb_details } ] } 
+                  $name_second_lb: { "Fn::Select" : [ "name", { get_param: second_lb_details } ] }  
+                  $ip_second_lb: { "Fn::Select" : [ "internal_ip", { get_param: second_lb_details } ] } 
+                  $name_third_lb: { "Fn::Select" : [ "name", { get_param: third_lb_details } ] }  
+                  $ip_third_lb: { "Fn::Select" : [ "internal_ip", { get_param: third_lb_details } ] }   
+              
+            
+  member_first_lb:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { "Fn::Select" : [ "pool_id", { get_param: first_lb_details } ] }
+      address: {get_attr: [server, first_address]}
+      protocol_port: { "Fn::Select" : [ "port", { get_param: first_lb_details } ] }
+   
+  member_second_lb:
+    type: OS::Neutron::PoolMember
+    properties:
+     pool_id: { "Fn::Select" : [ "pool_id", { get_param: second_lb_details } ] }
+     address: {get_attr: [server, first_address]}
+     protocol_port: { "Fn::Select" : [ "port", { get_param: second_lb_details } ] }
+
+  member_third_lb:
+    type: OS::Neutron::PoolMember
+    properties:
+      pool_id: { "Fn::Select" : [ "pool_id", { get_param: third_lb_details } ] }
+      address: {get_attr: [server, first_address]}
+      protocol_port: { "Fn::Select" : [ "port", { get_param: third_lb_details } ] }
+      
+  restart_policy:
+    type: OS::Heat::HARestarter
+    properties:
+      InstanceId: {get_resource: server} 
+      
+  wait_handle: 
+      type: AWS::CloudFormation::WaitConditionHandle
+
+  wait_condition: 
+    type: AWS::CloudFormation::WaitCondition
+    depends_on: [ server ]
+    properties: 
+      Handle: { get_resource: wait_handle }
+      Timeout: { get_param: deployment_timeout }     
+
+outputs:
+  instance_internal_ip:
+    description: instance internal ip
+    value: { get_attr: [ server, first_address ] }
+  instance_name:
+    description: instance name (hostname)
+    value: { get_attr: [ server, name ] }
+  restart_url:
+    description: URL to trigger instance restart
+    value: { get_attr : [ restart_policy, AlarmUrl ] }       
